@@ -2412,6 +2412,7 @@ class PE:
     DIRECTORY_ENTRY_BASERELOC (list of BaseRelocationData instances)
     DIRECTORY_ENTRY_TLS
     DIRECTORY_ENTRY_BOUND_IMPORT (list of BoundImportData instances)
+    DIRECTORY_ENTRY_DELAY_IMPORT (list of ImportDescData instances)
 
     The following dictionary attributes provide ways of mapping different
     constants. They will accept the numeric value and return the string

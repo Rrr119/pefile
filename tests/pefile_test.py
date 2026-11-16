@@ -439,6 +439,91 @@ class TestPEFile(unittest.TestCase):
                 self.assertIsNotNone(load_config_data)
                 self.assertIsNone(load_config_data.dynamic_relocations)
 
+    def test_delay_import_directory(self):
+        """The delay import directory must be parsed for both PE32 and PE32+.
+
+        The synthetic images contain one descriptor for DELAYED.dll with a
+        named import (hint 7) and an ordinal import (42), followed by an
+        all-zero terminator descriptor.
+        """
+        for pe64 in (False, True):
+            with self.subTest(pe64=pe64):
+                pe = pefile.PE(data=_create_pe_with_delay_imports_and_relocs(pe64))
+
+                self.assertTrue(hasattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT"))
+                self.assertEqual(len(pe.DIRECTORY_ENTRY_DELAY_IMPORT), 1)
+
+                module = pe.DIRECTORY_ENTRY_DELAY_IMPORT[0]
+                self.assertEqual(module.dll, b"DELAYED.dll")
+                self.assertEqual(module.struct.grAttrs, 1)
+                self.assertEqual(module.struct.phmod, 0x2000)
+                self.assertEqual(len(module.imports), 2)
+
+                image_base = 0x140000000 if pe64 else 0x400000
+                thunk_size = 8 if pe64 else 4
+
+                named, ordinal = module.imports
+                self.assertEqual(named.name, b"DelayedFunc")
+                self.assertEqual(named.hint, 7)
+                self.assertIsNone(named.ordinal)
+                self.assertFalse(named.import_by_ordinal)
+                self.assertEqual(named.address, image_base + 0x10A0)
+
+                self.assertIsNone(ordinal.name)
+                self.assertEqual(ordinal.ordinal, 42)
+                self.assertTrue(ordinal.import_by_ordinal)
+                self.assertEqual(
+                    ordinal.address, image_base + 0x10A0 + thunk_size
+                )
+
+                # The dump output must expose the same structure
+                dump_dict = pe.dump_dict()
+                self.assertIn("Delay Imported symbols", dump_dict)
+                module_list = dump_dict["Delay Imported symbols"][0]
+                self.assertEqual(module_list[1]["Name"], b"DelayedFunc")
+                self.assertEqual(module_list[1]["Hint"], 7)
+                self.assertEqual(module_list[2]["Ordinal"], 42)
+
+    def test_base_relocation_directory(self):
+        """The base relocation table must be parsed for both PE32 and PE32+.
+
+        The synthetic images contain a single relocation block for the page
+        at RVA 0x1000 with two entries, of type HIGHLOW (PE32) or DIR64
+        (PE32+).
+        """
+        for pe64 in (False, True):
+            with self.subTest(pe64=pe64):
+                pe = pefile.PE(data=_create_pe_with_delay_imports_and_relocs(pe64))
+
+                self.assertTrue(pe.has_relocs())
+                self.assertEqual(len(pe.DIRECTORY_ENTRY_BASERELOC), 1)
+
+                block = pe.DIRECTORY_ENTRY_BASERELOC[0]
+                self.assertEqual(block.struct.VirtualAddress, 0x1000)
+                self.assertEqual(block.struct.SizeOfBlock, 12)
+                self.assertEqual(len(block.entries), 2)
+
+                expected_type = (
+                    pefile.RELOCATION_TYPE["IMAGE_REL_BASED_DIR64"]
+                    if pe64
+                    else pefile.RELOCATION_TYPE["IMAGE_REL_BASED_HIGHLOW"]
+                )
+                for entry, offset in zip(block.entries, (0x10, 0x20)):
+                    self.assertEqual(entry.type, expected_type)
+                    self.assertEqual(entry.base_rva, 0x1000)
+                    self.assertEqual(entry.rva, 0x1000 + offset)
+
+                # The dump output must expose the same structure
+                dump_dict = pe.dump_dict()
+                self.assertIn("Base relocations", dump_dict)
+                block_list = dump_dict["Base relocations"][0]
+                self.assertEqual(block_list[1]["RVA"], 0x1010)
+                self.assertEqual(block_list[2]["RVA"], 0x1020)
+                self.assertEqual(
+                    block_list[1]["Type"],
+                    "DIR64" if pe64 else "HIGHLOW",
+                )
+
     def test_relocated_memory_mapped_image(self):
         """Test different rebasing methods produce the same image"""
 
@@ -923,3 +1008,153 @@ def _create_pe(virtual_size, size_of_raw_data):
     # Fill raw section data with a sentinel byte so leakage is obvious
     section_data = b"\xCC" * size_of_raw_data
     return bytes(headers) + section_data
+
+
+def _create_pe_with_delay_imports_and_relocs(pe64=False):
+    """Build a minimal PE32 (or PE32+ when pe64 is True) with one section
+    containing a delay import directory and a base relocation table.
+
+    Reused by the delay import and base relocation tests above.
+    """
+
+    section_alignment = 0x1000
+    file_alignment = 0x200
+    va = 0x1000  # section virtual address
+    pointer_to_raw_data = 0x400  # section data starts at file offset 0x400
+    size_of_raw_data = 0x600
+    virtual_size = 0x600
+    size_of_image = 0x2000
+
+    dos_header = bytearray(64)
+    dos_header[0:2] = b"MZ"
+    dos_header[60:64] = struct.pack("<I", 64)
+
+    machine = 0x8664 if pe64 else 0x014C  # AMD64 / I386
+    size_of_optional_header = 0xF0 if pe64 else 0xE0
+    file_header = (
+        struct.pack("<H", machine)
+        + struct.pack("<H", 1)  # NumberOfSections
+        + struct.pack("<I", 0)  # TimeDateStamp
+        + struct.pack("<I", 0)  # PointerToSymbolTable
+        + struct.pack("<I", 0)  # NumberOfSymbols
+        + struct.pack("<H", size_of_optional_header)
+        + struct.pack("<H", 0x0102)  # Characteristics
+    )
+
+    # Layout of the structures inside the section, as RVAs
+    delay_import_rva = 0x1000  # IMAGE_DELAY_IMPORT_DESCRIPTOR + terminator
+    int_rva = 0x1080  # Import Lookup Table (INT)
+    iat_rva = 0x10A0  # Import Address Table (IAT)
+    hint_name_rva = 0x10C0  # Hint/Name entry
+    dll_name_rva = 0x10E0  # DLL name string
+    reloc_rva = 0x1100  # Base relocation block
+
+    ordinal_flag = 0x8000000000000000 if pe64 else 0x80000000
+
+    def thunk(value):
+        return struct.pack("<Q" if pe64 else "<I", value)
+
+    section_data = bytearray(size_of_raw_data)
+
+    # INT/IAT: one import by name, one import by ordinal, null terminator
+    import_table = (
+        thunk(hint_name_rva) + thunk(ordinal_flag | 42) + thunk(0)
+    )
+    section_data[int_rva - va : int_rva - va + len(import_table)] = import_table
+    section_data[iat_rva - va : iat_rva - va + len(import_table)] = import_table
+
+    hint_name = struct.pack("<H", 7) + b"DelayedFunc\x00"
+    section_data[hint_name_rva - va : hint_name_rva - va + len(hint_name)] = hint_name
+    section_data[dll_name_rva - va : dll_name_rva - va + 12] = b"DELAYED.dll\x00"
+
+    # Delay import descriptor (grAttrs=1: members are RVAs) + null descriptor
+    delay_import_desc = struct.pack(
+        "<IIIIIIII",
+        1,  # grAttrs
+        dll_name_rva,  # szName
+        0x2000,  # phmod
+        iat_rva,  # pIAT
+        int_rva,  # pINT
+        0,  # pBoundIAT
+        0,  # pUnloadIAT
+        0,  # dwTimeStamp
+    )
+    section_data[0:64] = delay_import_desc + b"\x00" * 32
+
+    # Base relocation block for the page at 0x1000 with two entries,
+    # IMAGE_REL_BASED_DIR64 (PE32+) or IMAGE_REL_BASED_HIGHLOW (PE32)
+    reloc_type = 10 if pe64 else 3
+    reloc_entries = struct.pack(
+        "<HH", (reloc_type << 12) | 0x10, (reloc_type << 12) | 0x20
+    )
+    reloc_block = struct.pack("<II", 0x1000, 8 + len(reloc_entries)) + reloc_entries
+    section_data[reloc_rva - va : reloc_rva - va + len(reloc_block)] = reloc_block
+
+    data_directories = [(0, 0)] * 16
+    data_directories[5] = (reloc_rva, len(reloc_block))  # BASERELOC
+    data_directories[13] = (delay_import_rva, 64)  # DELAY_IMPORT
+    data_directory = b"".join(
+        struct.pack("<II", address, size) for address, size in data_directories
+    )
+
+    if pe64:
+        opt_header = (
+            struct.pack("<H", 0x020B)  # Magic PE32+
+            + struct.pack("<BB", 14, 0)  # LinkerVersion
+            + struct.pack("<I", size_of_raw_data)  # SizeOfCode
+            + struct.pack("<II", 0, 0)  # SizeOfInitialized/UninitializedData
+            + struct.pack("<I", va)  # AddressOfEntryPoint
+            + struct.pack("<I", va)  # BaseOfCode
+            + struct.pack("<Q", 0x140000000)  # ImageBase
+            + struct.pack("<II", section_alignment, file_alignment)
+            + struct.pack("<HHHHHH", 6, 0, 0, 0, 6, 0)  # OS/Image/Subsystem versions
+            + struct.pack("<I", 0)  # Win32VersionValue
+            + struct.pack("<I", size_of_image)  # SizeOfImage
+            + struct.pack("<I", 0x200)  # SizeOfHeaders
+            + struct.pack("<I", 0)  # CheckSum
+            + struct.pack("<H", 2)  # Subsystem GUI
+            + struct.pack("<H", 0x8100)  # DllCharacteristics
+            + struct.pack("<QQQQ", 0x100000, 0x1000, 0x100000, 0x1000)
+            + struct.pack("<II", 0, 16)  # LoaderFlags, NumberOfRvaAndSizes
+            + data_directory
+        )
+    else:
+        opt_header = (
+            struct.pack("<H", 0x010B)  # Magic PE32
+            + struct.pack("<BB", 14, 0)  # LinkerVersion
+            + struct.pack("<I", size_of_raw_data)  # SizeOfCode
+            + struct.pack("<II", 0, 0)  # SizeOfInitialized/UninitializedData
+            + struct.pack("<I", va)  # AddressOfEntryPoint
+            + struct.pack("<II", va, 0)  # BaseOfCode, BaseOfData
+            + struct.pack("<I", 0x400000)  # ImageBase
+            + struct.pack("<II", section_alignment, file_alignment)
+            + struct.pack("<HHHHHH", 6, 0, 0, 0, 6, 0)  # OS/Image/Subsystem versions
+            + struct.pack("<I", 0)  # Win32VersionValue
+            + struct.pack("<I", size_of_image)  # SizeOfImage
+            + struct.pack("<I", 0x200)  # SizeOfHeaders
+            + struct.pack("<I", 0)  # CheckSum
+            + struct.pack("<H", 2)  # Subsystem GUI
+            + struct.pack("<H", 0x8100)  # DllCharacteristics
+            + struct.pack("<IIII", 0x100000, 0x1000, 0x100000, 0x1000)
+            + struct.pack("<II", 0, 16)  # LoaderFlags, NumberOfRvaAndSizes
+            + data_directory
+        )
+    assert len(opt_header) == size_of_optional_header
+
+    section_header = (
+        b".text\x00\x00\x00"  # Name
+        + struct.pack("<I", virtual_size)  # VirtualSize
+        + struct.pack("<I", va)  # VirtualAddress
+        + struct.pack("<I", size_of_raw_data)  # SizeOfRawData
+        + struct.pack("<I", pointer_to_raw_data)  # PointerToRawData
+        + struct.pack("<IIHHI", 0, 0, 0, 0, 0x60000020)
+        # PointerToRelocations, PointerToLinenumbers,
+        # NumberOfRelocations, NumberOfLinenumbers, Characteristics
+    )
+
+    headers = (
+        bytes(dos_header) + b"PE\x00\x00" + file_header + opt_header + section_header
+    )
+    headers = headers.ljust(pointer_to_raw_data, b"\x00")
+
+    return bytes(headers) + bytes(section_data)

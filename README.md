@@ -43,6 +43,7 @@ Some of the tasks that pefile makes possible are:
 * Inspecting headers
 * Analyzing of sections' data
 * Retrieving embedded data
+* Parsing imports, delay-load imports, exports and base relocations from both 32-bit (PE32) and 64-bit (PE32+) binaries
 * [Reading strings from the resources](https://github.com/erocarrera/pefile/blob/wiki/ReadingResourceStrings.md)
 * Warnings for suspicious and malformed values
 * Basic modifying of PEs, like [writing to some fields](https://github.com/erocarrera/pefile/blob/wiki/UsageExamples.md#reading-and-writing-standard-header-members) and [other parts](https://github.com/erocarrera/pefile/blob/wiki/ModifyingPEImageData.md) of the PE
