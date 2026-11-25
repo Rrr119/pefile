@@ -63,6 +63,37 @@ To work with authenticated binaries, including **Authenticode signatures**, plea
 
 _pefile_ runs in several pipelines scanning hundreds of thousands of new PE files every day, and, while not perfect, it has grown to be pretty robust over time. That being said, small glitches are found now and then. If you bump into a PE that does not appear to be processed correctly, do report it, please! It will help make pefile a tiny bit more powerful.
 
+### Tolerant parsing
+
+Strict parsing remains the default, so existing callers keep receiving
+`PEFormatError` (or a classified subclass of it) for malformed files. For batch
+analysis, opt into tolerant parsing. It records errors, keeps the structures
+that could be parsed, and never propagates a parsing exception:
+
+```python
+pe = pefile.PE(data=malformed_data, tolerant=True)
+
+pe.DOS_HEADER          # None or the successfully parsed header
+pe.FILE_HEADER         # Partial results remain available
+pe.parse_ok            # False if any parsing error was recorded
+pe.partial             # True when parsing was incomplete
+pe.get_parse_errors()  # Classified PEFormatError instances
+pe.get_error_stats()   # {"dos_header": 1, "data_directory": 2, ...}
+```
+
+`strict=False`, `lenient=True`, `ignore_errors=True` and `best_effort=True`
+are accepted as aliases for `tolerant=True`. Each error has a `category`
+(see `pefile.PEErrorCategory`), `stage`, `offset` and `exception_type`.
+
+For a whole batch, `parse_many()` continues after bad samples and aggregates
+the statistics:
+
+```python
+results = pefile.parse_many(["a.exe", "b.exe", "bad.bin"])
+results.error_stats              # Counts per category
+results.get_error_statistics()   # Also includes stage/type counts
+```
+
 ## Dependencies
 
 _pefile_ is self-contained. The module has no dependencies; it is endianness independent; and it works on Windows, macOS, and Linux.

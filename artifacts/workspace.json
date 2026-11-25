@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid38841",
+  "B": "/home/dev/feedback/uid38841",
+  "sha": "5d0f0ee99bc7300e4bcb202eecb39384301b6076",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "erocarrera",
+    "repo": "pefile",
+    "sha": "5d0f0ee99bc7300e4bcb202eecb39384301b6076"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "pefile",
+    "cloneUrl": "https://github.com/Rrr119/pefile.git"
+  },
+  "at": "2026-11-25T20:35:40.280Z"
+}

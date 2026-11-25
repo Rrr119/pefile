@@ -812,14 +812,257 @@ class UnicodeStringWrapperPostProcessor:
             )
 
 
-class PEFormatError(Exception):
-    """Generic PE format error exception."""
+class PEErrorCategory:
+    """Categories used to classify PE parsing errors."""
 
-    def __init__(self, value):
+    FILE = "file"
+    TRUNCATED = "truncated"
+    DOS_HEADER = "dos_header"
+    NT_HEADERS = "nt_headers"
+    FILE_HEADER = "file_header"
+    OPTIONAL_HEADER = "optional_header"
+    SECTION = "section"
+    DATA_DIRECTORY = "data_directory"
+    EXPORT = "export"
+    IMPORT = "import"
+    RESOURCE = "resource"
+    EXCEPTION_DIRECTORY = "exception_directory"
+    RELOCATION = "relocation"
+    DEBUG = "debug"
+    TLS = "tls"
+    LOAD_CONFIG = "load_config"
+    BOUND_IMPORT = "bound_import"
+    DELAY_IMPORT = "delay_import"
+    RICH_HEADER = "rich_header"
+    STRING = "string"
+    DATA = "data"
+    OFFSET = "offset"
+    UNKNOWN = "unknown"
+
+
+class PEFormatError(Exception):
+    """Generic PE format error exception.
+
+    The exception also carries classification metadata so callers can group
+    errors without parsing human readable messages.  The original exception,
+    when one was wrapped, is available through ``original_exception``.
+    """
+
+    category = "format"
+
+    def __init__(
+        self,
+        value,
+        category=None,
+        stage=None,
+        offset=None,
+        original_exception=None,
+    ):
+        super().__init__(value)
         self.value = value
+        self.message = value if isinstance(value, str) else str(value)
+        self.category = category or self.category
+        self.stage = stage
+        self.offset = offset
+        self.file_offset = offset
+        self.original_exception = original_exception
+        if original_exception is not None:
+            self.exception_type = type(original_exception).__name__
+        else:
+            self.exception_type = type(self).__name__
+
+    @property
+    def kind(self):
+        """Alias for ``category`` for callers that use that terminology."""
+        return self.category
 
     def __str__(self):
         return repr(self.value)
+
+    def __getitem__(self, key):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key) from None
+
+    def to_dict(self):
+        """Return a JSON-friendly representation of the error."""
+        original = self.original_exception
+        return {
+            "category": self.category,
+            "stage": self.stage,
+            "offset": self.offset,
+            "message": self.message,
+            "exception_type": self.exception_type,
+            "original_exception_type": (
+                type(original).__name__ if original is not None else None
+            ),
+        }
+
+
+class PEIOError(PEFormatError):
+    """Failure while reading the input file."""
+
+    category = PEErrorCategory.FILE
+
+
+class PETruncatedError(PEFormatError):
+    """The input ended before a structure could be read completely."""
+
+    category = PEErrorCategory.TRUNCATED
+
+
+class PEDOSHeaderError(PEFormatError):
+    """Malformed DOS header."""
+
+    category = PEErrorCategory.DOS_HEADER
+
+
+class PENTHeadersError(PEFormatError):
+    """Malformed NT headers signature."""
+
+    category = PEErrorCategory.NT_HEADERS
+
+
+class PEFileHeaderError(PEFormatError):
+    """Malformed COFF file header."""
+
+    category = PEErrorCategory.FILE_HEADER
+
+
+class PEOptionalHeaderError(PEFormatError):
+    """Malformed optional header."""
+
+    category = PEErrorCategory.OPTIONAL_HEADER
+
+
+class PESectionError(PEFormatError):
+    """Malformed or unreadable section."""
+
+    category = PEErrorCategory.SECTION
+
+
+class PEDataDirectoryError(PEFormatError):
+    """Malformed data directory entry."""
+
+    category = PEErrorCategory.DATA_DIRECTORY
+
+
+class PEExportError(PEFormatError):
+    """Malformed export directory."""
+
+    category = PEErrorCategory.EXPORT
+
+
+class PEImportError(PEFormatError):
+    """Malformed import directory."""
+
+    category = PEErrorCategory.IMPORT
+
+
+class PEResourceError(PEFormatError):
+    """Malformed resource directory."""
+
+    category = PEErrorCategory.RESOURCE
+
+
+class PEExceptionDirectoryError(PEFormatError):
+    """Malformed exception directory."""
+
+    category = PEErrorCategory.EXCEPTION_DIRECTORY
+
+
+class PERelocationError(PEFormatError):
+    """Malformed base relocation directory."""
+
+    category = PEErrorCategory.RELOCATION
+
+
+class PEDebugError(PEFormatError):
+    """Malformed debug directory."""
+
+    category = PEErrorCategory.DEBUG
+
+
+class PETLSError(PEFormatError):
+    """Malformed TLS directory."""
+
+    category = PEErrorCategory.TLS
+
+
+class PELoadConfigError(PEFormatError):
+    """Malformed load configuration directory."""
+
+    category = PEErrorCategory.LOAD_CONFIG
+
+
+class PEBoundImportError(PEFormatError):
+    """Malformed bound import directory."""
+
+    category = PEErrorCategory.BOUND_IMPORT
+
+
+class PEDelayImportError(PEFormatError):
+    """Malformed delay import directory."""
+
+    category = PEErrorCategory.DELAY_IMPORT
+
+
+class PERichHeaderError(PEFormatError):
+    """Malformed Rich header."""
+
+    category = PEErrorCategory.RICH_HEADER
+
+
+class PEStringError(PEFormatError):
+    """Malformed string data."""
+
+    category = PEErrorCategory.STRING
+
+
+class PEDataError(PEFormatError):
+    """Data could not be read at the requested RVA/offset."""
+
+    category = PEErrorCategory.DATA
+
+
+class PEOffsetError(PEFormatError):
+    """An RVA/offset is outside the file."""
+
+    category = PEErrorCategory.OFFSET
+
+
+class PEUnknownError(PEFormatError):
+    """An unclassified parsing failure."""
+
+    category = PEErrorCategory.UNKNOWN
+
+
+_CATEGORY_ERROR_CLASSES = {
+    PEErrorCategory.FILE: PEIOError,
+    PEErrorCategory.TRUNCATED: PETruncatedError,
+    PEErrorCategory.DOS_HEADER: PEDOSHeaderError,
+    PEErrorCategory.NT_HEADERS: PENTHeadersError,
+    PEErrorCategory.FILE_HEADER: PEFileHeaderError,
+    PEErrorCategory.OPTIONAL_HEADER: PEOptionalHeaderError,
+    PEErrorCategory.SECTION: PESectionError,
+    PEErrorCategory.DATA_DIRECTORY: PEDataDirectoryError,
+    PEErrorCategory.EXPORT: PEExportError,
+    PEErrorCategory.IMPORT: PEImportError,
+    PEErrorCategory.RESOURCE: PEResourceError,
+    PEErrorCategory.EXCEPTION_DIRECTORY: PEExceptionDirectoryError,
+    PEErrorCategory.RELOCATION: PERelocationError,
+    PEErrorCategory.DEBUG: PEDebugError,
+    PEErrorCategory.TLS: PETLSError,
+    PEErrorCategory.LOAD_CONFIG: PELoadConfigError,
+    PEErrorCategory.BOUND_IMPORT: PEBoundImportError,
+    PEErrorCategory.DELAY_IMPORT: PEDelayImportError,
+    PEErrorCategory.RICH_HEADER: PERichHeaderError,
+    PEErrorCategory.STRING: PEStringError,
+    PEErrorCategory.DATA: PEDataError,
+    PEErrorCategory.OFFSET: PEOffsetError,
+    PEErrorCategory.UNKNOWN: PEUnknownError,
+}
 
 
 class Dump:
@@ -2949,18 +3192,49 @@ class PE:
         *, # args after this are keyword-only
         max_offset=0x10000000,
         max_repeated_import_addresses=15,
+        tolerant=None,
+        strict=None,
+        lenient=None,
+        ignore_errors=None,
+        best_effort=None,
     ):
+        if strict is not None:
+            tolerant = not strict
+        if tolerant is None:
+            tolerant = bool(lenient or ignore_errors or best_effort)
+        self.tolerant = bool(tolerant)
+        self._tolerant = self.tolerant
         self.max_symbol_exports = max_symbol_exports
         self.max_repeated_symbol = max_repeated_symbol
         self.max_repeated_import_addresses = max_repeated_import_addresses
+        try:
+            self.name = os.fspath(name) if name is not None else None
+        except TypeError:
+            self.name = name
 
         self._get_section_by_rva_last_used = None
 
         self.sections = []
 
         self.__warnings = []
+        self.__parse_errors = []
 
         self.PE_TYPE = None
+
+        # These attributes are always present on tolerant instances, even when
+        # parsing could not reach the corresponding structure.  Strict parsing
+        # retains its historical behaviour (an exception is raised before the
+        # instance is returned).
+        if self.tolerant:
+            self.DOS_HEADER = None
+            self.NT_HEADERS = None
+            self.FILE_HEADER = None
+            self.OPTIONAL_HEADER = None
+            self.header = b""
+            self.__data__ = b""
+            self.parse_complete = False
+            self.parse_ok = False
+            self.partial = True
 
         if name is None and data is None:
             raise ValueError("Must supply either name or data")
@@ -2990,11 +3264,30 @@ class PE:
         }
 
         fast_load = fast_load if fast_load is not None else globals()["fast_load"]
-        try:
-            self.__parse__(name, data, fast_load, max_offset)
-        except Exception:
-            self.close()
-            raise
+        if self.tolerant:
+            try:
+                self.__parse__(name, data, fast_load, max_offset)
+            except Exception as exc:
+                # A tolerant instance must never propagate a parsing failure.
+                # This is the final safety net for unforeseen parser bugs.
+                self._record_parse_error(
+                    exc,
+                    PEErrorCategory.UNKNOWN,
+                    stage="parse",
+                )
+            finally:
+                self.parse_complete = True
+                self.parse_ok = not self.__parse_errors
+                self.partial = not self.parse_ok
+        else:
+            try:
+                self.__parse__(name, data, fast_load, max_offset)
+                self.parse_complete = True
+                self.parse_ok = True
+                self.partial = False
+            except Exception:
+                self.close()
+                raise
 
     def __enter__(self):
         return self
@@ -3059,6 +3352,150 @@ class PE:
 
         return structure
 
+    def _classified_exception(self, exc, category, stage=None, offset=None):
+        """Return an exception carrying PE error classification metadata."""
+        if isinstance(exc, PEFormatError):
+            issue = exc
+            if issue.category in (None, "format", PEErrorCategory.UNKNOWN):
+                issue.category = category
+        else:
+            error_class = _CATEGORY_ERROR_CLASSES.get(category, PEUnknownError)
+            issue = error_class(
+                str(exc) or type(exc).__name__,
+                category=category,
+                stage=stage,
+                offset=offset,
+                original_exception=exc,
+            )
+        if issue.stage is None:
+            issue.stage = stage
+        if issue.offset is None and offset is not None:
+            issue.offset = offset
+            issue.file_offset = offset
+        return issue
+
+    def _record_parse_error(self, exc, category, stage=None, offset=None):
+        """Record a parsing error without interrupting tolerant parsing."""
+        issue = self._classified_exception(exc, category, stage, offset)
+        self.__parse_errors.append(issue)
+        warning = f'[{issue.category}] {issue.stage or "parse"}: {issue.message}'
+        if warning not in self.__warnings:
+            self.__warnings.append(warning)
+        return issue
+
+    def record_parse_error(self, exc, category, stage=None, offset=None):
+        """Public wrapper for recording a classified parsing error."""
+        return self._record_parse_error(exc, category, stage, offset)
+
+    def _find_nt_headers_offset(self, start=0):
+        """Best-effort search for a PE signature after a bad e_lfanew."""
+        try:
+            data = self.__data__
+            limit = len(data) if hasattr(data, "__len__") else 0
+            position = max(0, int(start))
+            if position + 4 <= limit:
+                found = data.find(b"PE\0\0", position)
+                if found == -1:
+                    return None
+                return found
+        except Exception:
+            return None
+        return None
+
+    def get_parse_errors(self):
+        """Return the list of classified parsing errors."""
+        return list(self.__parse_errors)
+
+    @property
+    def parse_errors(self):
+        """Classified parsing errors encountered while parsing."""
+        return self.get_parse_errors()
+
+    @property
+    def errors(self):
+        """Alias for :attr:`parse_errors`."""
+        return self.get_parse_errors()
+
+    def has_parse_errors(self):
+        """Return True if parsing recorded at least one error."""
+        return bool(self.__parse_errors)
+
+    def get_error_stats(self, by="category"):
+        """Return error counts grouped by ``category`` (default) or another field.
+
+        ``by`` may be one of ``category``, ``stage``, ``exception_type`` or
+        ``kind``.  The result is a plain dictionary, making it easy to serialize
+        or aggregate over a batch of samples.
+        """
+        aliases = {"type": "exception_type", "class": "exception_type"}
+        by = aliases.get(by, by)
+        alias_for_kind = {"kind": "category"}
+        by = alias_for_kind.get(by, by)
+        counter = Counter()
+        for issue in self.__parse_errors:
+            counter[str(getattr(issue, by, PEErrorCategory.UNKNOWN))] += 1
+        return dict(counter)
+
+    def get_error_statistics(self):
+        """Return detailed error statistics for this sample."""
+        by_exception_type = self.get_error_stats("exception_type")
+        return {
+            "total": len(self.__parse_errors),
+            "by_category": self.get_error_stats("category"),
+            "by_stage": self.get_error_stats("stage"),
+            "by_exception_type": by_exception_type,
+            "by_type": by_exception_type,
+            "by_class": by_exception_type,
+            "partial": bool(self.partial),
+        }
+
+    def get_parse_error_stats(self):
+        """Alias for :meth:`get_error_stats`."""
+        return self.get_error_stats()
+
+    def get_exception_stats(self, by="category"):
+        """Alias for :meth:`get_error_stats`."""
+        return self.get_error_stats(by)
+
+    def get_parse_statistics(self):
+        """Alias for :meth:`get_error_statistics`."""
+        return self.get_error_statistics()
+
+    @classmethod
+    def parse_many(cls, samples, **kwargs) -> "PEBatchResult":
+        """Parse several samples, continuing after each malformed one."""
+        return parse_many(samples, **kwargs)
+
+    @property
+    def error_stats(self):
+        """Error counts grouped by category."""
+        return self.get_error_stats()
+
+    @property
+    def error_statistics(self):
+        """Detailed error statistics for this sample."""
+        return self.get_error_statistics()
+
+    @property
+    def parse_error_count(self):
+        """Number of classified parsing errors."""
+        return len(self.__parse_errors)
+
+    @property
+    def error_count(self):
+        """Alias for :attr:`parse_error_count`."""
+        return self.parse_error_count
+
+    @property
+    def total_errors(self):
+        """Alias for :attr:`parse_error_count`."""
+        return self.parse_error_count
+
+    @property
+    def exception_stats(self):
+        """Alias for :attr:`error_stats`."""
+        return self.get_error_stats()
+
     def __parse__(self, fname, data, fast_load, max_offset):
         """Parse a Portable Executable file.
 
@@ -3067,9 +3504,32 @@ class PE:
         """
 
         if fname is not None:
-            stat = os.stat(fname)
+            try:
+                stat = os.stat(fname)
+            except Exception as exc:
+                if not self.tolerant:
+                    raise
+                self._record_parse_error(
+                    exc, PEErrorCategory.FILE, stage="open file"
+                )
+                self.__data__ = b""
+                self.__from_file = False
+                return
             if stat.st_size == 0:
-                raise PEFormatError("The file is empty")
+                if not self.tolerant:
+                    raise PETruncatedError(
+                        "The file is empty", category=PEErrorCategory.FILE
+                    )
+                self._record_parse_error(
+                    PETruncatedError(
+                        "The file is empty", category=PEErrorCategory.FILE
+                    ),
+                    PEErrorCategory.FILE,
+                    stage="open file",
+                )
+                self.__data__ = b""
+                self.__from_file = False
+                return
             fd = None
             try:
                 fd = open(fname, "rb")
@@ -3081,7 +3541,14 @@ class PE:
                     # Windows
                     self.__data__ = mmap.mmap(self.fileno, 0, access=mmap.ACCESS_READ)
                 self.__from_file = True
-            except OSError as excp:
+            except (OSError, ValueError, TypeError) as excp:
+                if self.tolerant:
+                    self._record_parse_error(
+                        excp, PEErrorCategory.FILE, stage="open file"
+                    )
+                    self.__data__ = b""
+                    self.__from_file = False
+                    return
                 msg = str(excp)
                 msg = f"{msg}" if msg else ""
                 msg = f"Unable to access file '{fname}': {msg}"
@@ -3093,12 +3560,20 @@ class PE:
             self.__data__ = data
             self.__from_file = False
 
+        if self.tolerant and not self.__data__:
+            self._record_parse_error(
+                PETruncatedError("The file is empty", category=PEErrorCategory.FILE),
+                PEErrorCategory.FILE,
+                stage="read data",
+            )
+            return
+
         # Resources should not overlap each other, so they should not exceed the
         # file size.
         self.__resource_size_limit_upperbounds = len(self.__data__)
         self.__resource_size_limit_reached = False
 
-        if not fast_load:
+        if not fast_load and len(self.__data__) > 0:
             for byte, byte_count in Counter(bytearray(self.__data__)).items():
                 # Only report the cases where a byte makes up for more than 50% (if
                 # zero) or 15% (if non-zero) of the file's contents. There are
@@ -3114,24 +3589,80 @@ class PE:
 
         dos_header_data = self.__data__[:64]
         if len(dos_header_data) != 64:
-            raise PEFormatError(
-                "Unable to read the DOS Header, possibly a truncated file."
+            if not self.tolerant:
+                raise PETruncatedError(
+                    "Unable to read the DOS Header, possibly a truncated file.",
+                    category=PEErrorCategory.DOS_HEADER,
+                )
+            self._record_parse_error(
+                PETruncatedError(
+                    "Unable to read the DOS Header, possibly a truncated file.",
+                    category=PEErrorCategory.DOS_HEADER,
+                ),
+                PEErrorCategory.DOS_HEADER,
+                stage="DOS header",
+                offset=0,
             )
+            if not dos_header_data:
+                return
+            dos_header_data = dos_header_data + b"\0" * (64 - len(dos_header_data))
 
         self.DOS_HEADER = self.__unpack_data__(
             self.__IMAGE_DOS_HEADER_format__, dos_header_data, file_offset=0
         )
 
+        if self.DOS_HEADER is None:
+            if not self.tolerant:
+                raise PEDOSHeaderError("Unable to parse the DOS Header.")
+            self._record_parse_error(
+                PEDOSHeaderError("Unable to parse the DOS Header."),
+                PEErrorCategory.DOS_HEADER,
+                stage="DOS header",
+                offset=0,
+            )
+            return
         if self.DOS_HEADER.e_magic == IMAGE_DOSZM_SIGNATURE:
-            raise PEFormatError("Probably a ZM Executable (not a PE file).")
+            if not self.tolerant:
+                raise PEDOSHeaderError("Probably a ZM Executable (not a PE file).")
+            self._record_parse_error(
+                PEDOSHeaderError("Probably a ZM Executable (not a PE file)."),
+                PEErrorCategory.DOS_HEADER,
+                stage="DOS header",
+                offset=0,
+            )
+            return
         if not self.DOS_HEADER or self.DOS_HEADER.e_magic != IMAGE_DOS_SIGNATURE:
-            raise PEFormatError("DOS Header magic not found.")
+            if not self.tolerant:
+                raise PEDOSHeaderError("DOS Header magic not found.")
+            self._record_parse_error(
+                PEDOSHeaderError("DOS Header magic not found."),
+                PEErrorCategory.DOS_HEADER,
+                stage="DOS header",
+                offset=0,
+            )
+            return
 
         # Check for sane value in e_lfanew
         if self.DOS_HEADER.e_lfanew > len(self.__data__):
-            raise PEFormatError("Invalid e_lfanew value, probably not a PE file")
-
-        nt_headers_offset = self.DOS_HEADER.e_lfanew
+            if not self.tolerant:
+                raise PEDOSHeaderError(
+                    "Invalid e_lfanew value, probably not a PE file"
+                )
+            self._record_parse_error(
+                PEDOSHeaderError("Invalid e_lfanew value, probably not a PE file"),
+                PEErrorCategory.DOS_HEADER,
+                stage="DOS header",
+                offset=0x3C,
+            )
+            recovered = self._find_nt_headers_offset()
+            if recovered is None:
+                return
+            self.__warnings.append(
+                f"Recovered NT headers at offset {recovered:#x} after invalid e_lfanew."
+            )
+            nt_headers_offset = recovered
+        else:
+            nt_headers_offset = self.DOS_HEADER.e_lfanew
 
         self.NT_HEADERS = self.__unpack_data__(
             self.__IMAGE_NT_HEADERS_format__,
@@ -3143,18 +3674,71 @@ class PE:
         # around with sections:
         # Some malware will cause the Signature value to not exist at all
         if not self.NT_HEADERS or not self.NT_HEADERS.Signature:
-            raise PEFormatError("NT Headers not found.")
+            if not self.tolerant:
+                raise PENTHeadersError("NT Headers not found.")
+            self._record_parse_error(
+                PENTHeadersError("NT Headers not found."),
+                PEErrorCategory.NT_HEADERS,
+                stage="NT headers",
+                offset=nt_headers_offset,
+            )
+            return
 
         if self.NT_HEADERS.Signature & 0xFFFF == IMAGE_NE_SIGNATURE:
-            raise PEFormatError("Invalid NT Headers signature. Probably a NE file")
+            message = "Invalid NT Headers signature. Probably a NE file"
+            if not self.tolerant:
+                raise PENTHeadersError(message)
+            self._record_parse_error(
+                PENTHeadersError(message),
+                PEErrorCategory.NT_HEADERS,
+                stage="NT headers",
+                offset=nt_headers_offset,
+            )
+            return
         if self.NT_HEADERS.Signature & 0xFFFF == IMAGE_LE_SIGNATURE:
-            raise PEFormatError("Invalid NT Headers signature. Probably a LE file")
+            message = "Invalid NT Headers signature. Probably a LE file"
+            if not self.tolerant:
+                raise PENTHeadersError(message)
+            self._record_parse_error(
+                PENTHeadersError(message),
+                PEErrorCategory.NT_HEADERS,
+                stage="NT headers",
+                offset=nt_headers_offset,
+            )
+            return
         if self.NT_HEADERS.Signature & 0xFFFF == IMAGE_LX_SIGNATURE:
-            raise PEFormatError("Invalid NT Headers signature. Probably a LX file")
+            message = "Invalid NT Headers signature. Probably a LX file"
+            if not self.tolerant:
+                raise PENTHeadersError(message)
+            self._record_parse_error(
+                PENTHeadersError(message),
+                PEErrorCategory.NT_HEADERS,
+                stage="NT headers",
+                offset=nt_headers_offset,
+            )
+            return
         if self.NT_HEADERS.Signature & 0xFFFF == IMAGE_TE_SIGNATURE:
-            raise PEFormatError("Invalid NT Headers signature. Probably a TE file")
+            message = "Invalid NT Headers signature. Probably a TE file"
+            if not self.tolerant:
+                raise PENTHeadersError(message)
+            self._record_parse_error(
+                PENTHeadersError(message),
+                PEErrorCategory.NT_HEADERS,
+                stage="NT headers",
+                offset=nt_headers_offset,
+            )
+            return
         if self.NT_HEADERS.Signature != IMAGE_NT_SIGNATURE:
-            raise PEFormatError("Invalid NT Headers signature.")
+            message = "Invalid NT Headers signature."
+            if not self.tolerant:
+                raise PENTHeadersError(message)
+            self._record_parse_error(
+                PENTHeadersError(message),
+                PEErrorCategory.NT_HEADERS,
+                stage="NT headers",
+                offset=nt_headers_offset,
+            )
+            return
 
         self.FILE_HEADER = self.__unpack_data__(
             self.__IMAGE_FILE_HEADER_format__,
@@ -3163,16 +3747,46 @@ class PE:
         )
 
         if not self.FILE_HEADER:
-            raise PEFormatError("File Header missing")
+            if not self.tolerant:
+                raise PEFileHeaderError("File Header missing")
+            self._record_parse_error(
+                PEFileHeaderError("File Header missing"),
+                PEErrorCategory.FILE_HEADER,
+                stage="file header",
+                offset=nt_headers_offset + 4,
+            )
+            return
 
         # Set the image's flags according to the Characteristics member
-        image_flags = retrieve_flags(IMAGE_CHARACTERISTICS, "IMAGE_FILE_")
-        set_flags(self.FILE_HEADER, self.FILE_HEADER.Characteristics, image_flags)
+        try:
+            image_flags = retrieve_flags(IMAGE_CHARACTERISTICS, "IMAGE_FILE_")
+            set_flags(self.FILE_HEADER, self.FILE_HEADER.Characteristics, image_flags)
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.FILE_HEADER,
+                stage="file header flags",
+                offset=nt_headers_offset + 4,
+            )
 
         optional_header_offset = nt_headers_offset + 4 + self.FILE_HEADER.sizeof()
 
         # Note: location of sections can be controlled from PE header:
         sections_offset = optional_header_offset + self.FILE_HEADER.SizeOfOptionalHeader
+
+        if self.tolerant:
+            try:
+                sections_offset = int(sections_offset)
+            except Exception:
+                self._record_parse_error(
+                    PEFormatError("Invalid SizeOfOptionalHeader"),
+                    PEErrorCategory.FILE_HEADER,
+                    stage="file header",
+                    offset=nt_headers_offset + 4,
+                )
+                sections_offset = optional_header_offset
 
         self.OPTIONAL_HEADER = self.__unpack_data__(
             self.__IMAGE_OPTIONAL_HEADER_format__,
@@ -3253,22 +3867,44 @@ class PE:
         # Die gracefully if there is no OPTIONAL_HEADER field
         # 975440f5ad5e2e4a92c4d9a5f22f75c1
         if self.OPTIONAL_HEADER is None:
-            raise PEFormatError("No Optional Header found, invalid PE32 or PE32+ file.")
+            if not self.tolerant:
+                raise PEOptionalHeaderError(
+                    "No Optional Header found, invalid PE32 or PE32+ file."
+                )
+            self._record_parse_error(
+                PEOptionalHeaderError(
+                    "No Optional Header found, invalid PE32 or PE32+ file."
+                ),
+                PEErrorCategory.OPTIONAL_HEADER,
+                stage="optional header",
+                offset=optional_header_offset,
+            )
+            return
         if self.PE_TYPE is None:
             self.__warnings.append(
                 f"Invalid type {self.OPTIONAL_HEADER.Magic:#06x} in Optional Header."
             )
 
-        dll_characteristics_flags = retrieve_flags(
-            DLL_CHARACTERISTICS, "IMAGE_DLLCHARACTERISTICS_"
-        )
+        try:
+            dll_characteristics_flags = retrieve_flags(
+                DLL_CHARACTERISTICS, "IMAGE_DLLCHARACTERISTICS_"
+            )
 
-        # Set the Dll Characteristics flags according to the DllCharacteristics member
-        set_flags(
-            self.OPTIONAL_HEADER,
-            self.OPTIONAL_HEADER.DllCharacteristics,
-            dll_characteristics_flags,
-        )
+            # Set the Dll Characteristics flags according to the DllCharacteristics member
+            set_flags(
+                self.OPTIONAL_HEADER,
+                self.OPTIONAL_HEADER.DllCharacteristics,
+                dll_characteristics_flags,
+            )
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.OPTIONAL_HEADER,
+                stage="optional header flags",
+                offset=optional_header_offset,
+            )
 
         self.OPTIONAL_HEADER.DATA_DIRECTORY = []
         offset = optional_header_offset + self.OPTIONAL_HEADER.sizeof()
@@ -3302,34 +3938,53 @@ class PE:
             )
 
         MAX_ASSUMED_VALID_NUMBER_OF_RVA_AND_SIZES = 0x100
+        directory_count = min(directory_count, IMAGE_NUMBEROF_DIRECTORY_ENTRIES * 16)
         for i in range(directory_count):
             if len(self.__data__) - offset == 0:
                 break
 
-            if len(self.__data__) - offset < 8:
-                data = self.__data__[offset:] + b"\0" * 8
-            else:
-                data = self.__data__[
-                    offset : offset + MAX_ASSUMED_VALID_NUMBER_OF_RVA_AND_SIZES
-                ]
-
-            dir_entry = self.__unpack_data__(
-                self.__IMAGE_DATA_DIRECTORY_format__, data, file_offset=offset
-            )
-
-            if dir_entry is None:
-                break
-
-            # Would fail if missing an entry
-            # 1d4937b2fa4d84ad1bce0309857e70ca offending sample
             try:
-                dir_entry.name = DIRECTORY_ENTRY[i]
-            except (KeyError, AttributeError):
+                if len(self.__data__) - offset < 8:
+                    data = self.__data__[offset:] + b"\0" * 8
+                else:
+                    data = self.__data__[
+                        offset : offset + MAX_ASSUMED_VALID_NUMBER_OF_RVA_AND_SIZES
+                    ]
+
+                dir_entry = self.__unpack_data__(
+                    self.__IMAGE_DATA_DIRECTORY_format__, data, file_offset=offset
+                )
+
+                if dir_entry is None:
+                    if self.tolerant:
+                        self._record_parse_error(
+                            PEDataDirectoryError("Unable to parse directory entry."),
+                            PEErrorCategory.DATA_DIRECTORY,
+                            stage=f"data directory {i}",
+                            offset=offset,
+                        )
+                    break
+
+                # Would fail if missing an entry
+                # 1d4937b2fa4d84ad1bce0309857e70ca offending sample
+                try:
+                    dir_entry.name = DIRECTORY_ENTRY[i]
+                except (KeyError, AttributeError):
+                    break
+
+                offset += dir_entry.sizeof()
+
+                self.OPTIONAL_HEADER.DATA_DIRECTORY.append(dir_entry)
+            except Exception as exc:
+                if not self.tolerant:
+                    raise
+                self._record_parse_error(
+                    exc,
+                    PEErrorCategory.DATA_DIRECTORY,
+                    stage=f"data directory {i}",
+                    offset=offset,
+                )
                 break
-
-            offset += dir_entry.sizeof()
-
-            self.OPTIONAL_HEADER.DATA_DIRECTORY.append(dir_entry)
 
             # If the offset goes outside the optional header, the loop is
             # broken, regardless of how many directories NumberOfRvaAndSizes
@@ -3347,52 +4002,102 @@ class PE:
             ):
                 break
 
-        offset = self.parse_sections(sections_offset, max_offset)
+        try:
+            offset = self.parse_sections(sections_offset, max_offset)
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.SECTION,
+                stage="sections",
+                offset=sections_offset,
+            )
+            offset = sections_offset
 
         # There could be a problem if there are no raw data sections
         # greater than 0
         # fc91013eb72529da005110a3403541b6 example
         # Should this throw an exception in the minimum header offset
         # can't be found?
-        rawDataPointers = [
-            self.adjust_PointerToRawData(s.PointerToRawData)
-            for s in self.sections
-            if s.PointerToRawData > 0
-        ]
+        try:
+            rawDataPointers = [
+                self.adjust_PointerToRawData(s.PointerToRawData)
+                for s in self.sections
+                if s.PointerToRawData > 0
+            ]
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.SECTION,
+                stage="header size",
+            )
+            rawDataPointers = []
 
         if len(rawDataPointers) > 0:
             lowest_section_offset = min(rawDataPointers)
         else:
             lowest_section_offset = None
 
-        if not lowest_section_offset or lowest_section_offset < offset:
-            self.header = self.__data__[:offset]
-        else:
-            self.header = self.__data__[:lowest_section_offset]
+        try:
+            if not lowest_section_offset or lowest_section_offset < offset:
+                self.header = self.__data__[:offset]
+            else:
+                self.header = self.__data__[:lowest_section_offset]
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.DATA,
+                stage="header data",
+            )
+            self.header = b""
 
         # Check whether the entry point lies within a section
-        if (
-            self.get_section_by_rva(self.OPTIONAL_HEADER.AddressOfEntryPoint)
-            is not None
-        ):
-            # Check whether the entry point lies within the file
-            ep_offset = self.get_offset_from_rva(
-                self.OPTIONAL_HEADER.AddressOfEntryPoint
-            )
-            if ep_offset > len(self.__data__):
-                self.__warnings.append(
-                    "Possibly corrupt file. AddressOfEntryPoint lies outside the "
-                    f"file. AddressOfEntryPoint: {self.OPTIONAL_HEADER.AddressOfEntryPoint:#x}"
+        try:
+            if (
+                self.get_section_by_rva(self.OPTIONAL_HEADER.AddressOfEntryPoint)
+                is not None
+            ):
+                # Check whether the entry point lies within the file
+                ep_offset = self.get_offset_from_rva(
+                    self.OPTIONAL_HEADER.AddressOfEntryPoint
                 )
+                if ep_offset > len(self.__data__):
+                    self.__warnings.append(
+                        "Possibly corrupt file. AddressOfEntryPoint lies outside the "
+                        f"file. AddressOfEntryPoint: {self.OPTIONAL_HEADER.AddressOfEntryPoint:#x}"
+                    )
 
-        else:
-            self.__warnings.append(
-                "AddressOfEntryPoint lies outside the sections' boundaries. "
-                f"AddressOfEntryPoint: {self.OPTIONAL_HEADER.AddressOfEntryPoint:#x}"
+            else:
+                self.__warnings.append(
+                    "AddressOfEntryPoint lies outside the sections' boundaries. "
+                    f"AddressOfEntryPoint: {self.OPTIONAL_HEADER.AddressOfEntryPoint:#x}"
+                )
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.OFFSET,
+                stage="entry point",
             )
 
         if not fast_load:
-            self.full_load()
+            if self.tolerant:
+                try:
+                    self.full_load()
+                except Exception as exc:
+                    self._record_parse_error(
+                        exc,
+                        PEErrorCategory.DATA_DIRECTORY,
+                        stage="full load",
+                    )
+            else:
+                self.full_load()
 
     def parse_rich_header(self):
         """Parses the Rich Header.
@@ -3405,6 +4110,9 @@ class PE:
         ...
         XX Rich, checksum, 0, 0,...
         """
+
+        if getattr(self, "OPTIONAL_HEADER", None) is None:
+            return None
 
         # Rich Header constants
         DANS = 0x536E6144  # 'DanS' as dword
@@ -3524,12 +4232,28 @@ class PE:
         It also parses the rich header, which may or may not present.
         """
 
+        if getattr(self, "OPTIONAL_HEADER", None) is None:
+            if self.tolerant:
+                return
         self.parse_data_directories()
 
         class RichHeader:
             pass
 
-        rich_header = self.parse_rich_header()
+        if getattr(self, "OPTIONAL_HEADER", None) is None:
+            rich_header = None
+        else:
+            try:
+                rich_header = self.parse_rich_header()
+            except Exception as exc:
+                if not self.tolerant:
+                    raise
+                self._record_parse_error(
+                    exc,
+                    PEErrorCategory.RICH_HEADER,
+                    stage="rich header",
+                )
+                rich_header = None
         if rich_header:
             self.RICH_HEADER = RichHeader()
             self.RICH_HEADER.checksum = rich_header.get("checksum", None)
@@ -3614,7 +4338,27 @@ class PE:
         parameter.
         """
 
+        if (
+            getattr(self, "FILE_HEADER", None) is None
+            or getattr(self, "OPTIONAL_HEADER", None) is None
+        ):
+            self.sections = []
+            if self.tolerant:
+                return offset
+            raise PEFormatError("Cannot parse sections without FILE/OPTIONAL headers.")
+
         self.sections = []
+        try:
+            offset = int(offset)
+        except Exception:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                PEFormatError("Invalid section table offset"),
+                PEErrorCategory.SECTION,
+                stage="sections",
+            )
+            offset = 0
         MAX_SIMULTANEOUS_ERRORS = 3
         # Currently pefile deviates from the specification by starting from zero and not one.
         # Entries in the section table are numbered starting from one (1).
@@ -3644,7 +4388,18 @@ class PE:
                     "virtsectblXP?)."
                 )
                 break
-            section.__unpack__(section_data)
+            try:
+                section.__unpack__(section_data)
+            except Exception as exc:
+                if not self.tolerant:
+                    raise
+                self._record_parse_error(
+                    exc,
+                    PEErrorCategory.SECTION,
+                    stage=f"section {i}",
+                    offset=section_offset,
+                )
+                continue
             self.__structures__.append(section)
 
             if section.SizeOfRawData + section.PointerToRawData > len(self.__data__):
@@ -3699,10 +4454,20 @@ class PE:
                 self.__warnings.append("Too many warnings parsing section. Aborting.")
                 break
 
-            section_flags = retrieve_flags(SECTION_CHARACTERISTICS, "IMAGE_SCN_")
+            try:
+                section_flags = retrieve_flags(SECTION_CHARACTERISTICS, "IMAGE_SCN_")
 
-            # Set the section's flags according to the Characteristics member
-            set_flags(section, section.Characteristics, section_flags)
+                # Set the section's flags according to the Characteristics member
+                set_flags(section, section.Characteristics, section_flags)
+            except Exception as exc:
+                if not self.tolerant:
+                    raise
+                self._record_parse_error(
+                    exc,
+                    PEErrorCategory.SECTION,
+                    stage=f"section {i} flags",
+                    offset=section_offset,
+                )
 
             # Set the section's original index as it may change after being sorted by VirtualAddress
             section.index_in_file = i
@@ -3711,7 +4476,16 @@ class PE:
         # Sort the sections by their VirtualAddress and add a field to each of them
         # with the VirtualAddress of the next section. This will allow to check
         # for potentially overlapping sections in badly constructed PEs.
-        self.sections.sort(key=lambda a: a.VirtualAddress)
+        try:
+            self.sections.sort(key=lambda a: a.VirtualAddress)
+        except Exception as exc:
+            if not self.tolerant:
+                raise
+            self._record_parse_error(
+                exc,
+                PEErrorCategory.SECTION,
+                stage="section sort",
+            )
         for idx, section in enumerate(self.sections):
             if idx == len(self.sections) - 1:
                 section.next_section_virtual_address = None
@@ -3776,6 +4550,11 @@ class PE:
         attribute will not have a `symbols` attribute.
         """
 
+        if getattr(self, "OPTIONAL_HEADER", None) is None:
+            if self.tolerant:
+                return
+            raise PEFormatError("Cannot parse data directories without a header.")
+
         if directories is not None and not isinstance(directories, (tuple, list)):
             directories = [directories]
 
@@ -3798,43 +4577,79 @@ class PE:
             # IMAGE_DIRECTORY_ENTRY_RESERVED not processed
         )
 
+        directory_categories = {
+            "IMAGE_DIRECTORY_ENTRY_EXPORT": PEErrorCategory.EXPORT,
+            "IMAGE_DIRECTORY_ENTRY_IMPORT": PEErrorCategory.IMPORT,
+            "IMAGE_DIRECTORY_ENTRY_RESOURCE": PEErrorCategory.RESOURCE,
+            "IMAGE_DIRECTORY_ENTRY_EXCEPTION": PEErrorCategory.EXCEPTION_DIRECTORY,
+            "IMAGE_DIRECTORY_ENTRY_BASERELOC": PEErrorCategory.RELOCATION,
+            "IMAGE_DIRECTORY_ENTRY_DEBUG": PEErrorCategory.DEBUG,
+            "IMAGE_DIRECTORY_ENTRY_TLS": PEErrorCategory.TLS,
+            "IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG": PEErrorCategory.LOAD_CONFIG,
+            "IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT": PEErrorCategory.BOUND_IMPORT,
+            "IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT": PEErrorCategory.DELAY_IMPORT,
+        }
+
         for entry in directory_parsing:
             try:
                 directory_index = DIRECTORY_ENTRY[entry[0]]
                 dir_entry = self.OPTIONAL_HEADER.DATA_DIRECTORY[directory_index]
             except IndexError:
                 break
+            except Exception as exc:
+                if self.tolerant:
+                    self._record_parse_error(
+                        exc,
+                        PEErrorCategory.DATA_DIRECTORY,
+                        stage=entry[0],
+                    )
+                    break
+                raise
 
             # Only process all the directories if individual ones not chosen
             if directories is None or directory_index in directories:
                 value = None
-                if dir_entry.VirtualAddress:
-                    if (
-                        forwarded_exports_only
-                        and entry[0] == "IMAGE_DIRECTORY_ENTRY_EXPORT"
-                    ):
-                        value = entry[1](
-                            dir_entry.VirtualAddress,
-                            dir_entry.Size,
-                            forwarded_only=True,
+                try:
+                    if dir_entry.VirtualAddress:
+                        if (
+                            forwarded_exports_only
+                            and entry[0] == "IMAGE_DIRECTORY_ENTRY_EXPORT"
+                        ):
+                            value = entry[1](
+                                dir_entry.VirtualAddress,
+                                dir_entry.Size,
+                                forwarded_only=True,
+                            )
+                        elif (
+                            import_dllnames_only
+                            and entry[0] == "IMAGE_DIRECTORY_ENTRY_IMPORT"
+                        ):
+                            value = entry[1](
+                                dir_entry.VirtualAddress,
+                                dir_entry.Size,
+                                dllnames_only=True,
+                            )
+                        else:
+                            value = entry[1](dir_entry.VirtualAddress, dir_entry.Size)
+
+                        if value:
+                            setattr(self, entry[0][6:], value)
+                except Exception as excp:
+                    if self.tolerant:
+                        self._record_parse_error(
+                            excp,
+                            directory_categories.get(
+                                entry[0], PEErrorCategory.DATA_DIRECTORY
+                            ),
+                            stage=entry[0],
+                            offset=dir_entry.VirtualAddress,
                         )
-                    elif (
-                        import_dllnames_only
-                        and entry[0] == "IMAGE_DIRECTORY_ENTRY_IMPORT"
-                    ):
-                        value = entry[1](
-                            dir_entry.VirtualAddress, dir_entry.Size, dllnames_only=True
+                    elif isinstance(excp, PEFormatError):
+                        self.__warnings.append(
+                            f'Failed to process directory "{entry[0]}": {excp}'
                         )
                     else:
-                        try:
-                            value = entry[1](dir_entry.VirtualAddress, dir_entry.Size)
-                        except PEFormatError as excp:
-                            self.__warnings.append(
-                                f'Failed to process directory "{entry[0]}": {excp}'
-                            )
-
-                    if value:
-                        setattr(self, entry[0][6:], value)
+                        raise
 
             if (
                 directories is not None
@@ -6596,7 +7411,33 @@ class PE:
         print(self.dump_info(encoding=encoding))
 
     def dump_info(self, dump=None, encoding="ascii"):
-        """Dump all the PE header information into a human readable string."""
+        """Dump all the PE header information into a human readable string.
+
+        In tolerant mode this returns whatever information could be collected,
+        even when an unexpected error interrupts the dump.
+        """
+
+        if not self.tolerant:
+            return self._dump_info(dump=dump, encoding=encoding)
+
+        dump = dump if dump is not None else Dump()
+        try:
+            return self._dump_info(dump=dump, encoding=encoding)
+        except Exception as exc:
+            dump.add_header("Partial Parse")
+            dump.add_line(
+                "Unable to dump all structures; returning collected information."
+            )
+            dump.add_line(f"Dump error: {type(exc).__name__}: {exc}")
+            for issue in self.get_parse_errors():
+                dump.add_line(
+                    f"[{issue.category}] {issue.stage or 'parse'}: {issue.message}"
+                )
+            dump.add_newline()
+            return dump.get_text()
+
+    def _dump_info(self, dump=None, encoding="ascii"):
+        """Dump all PE header information into a human readable string."""
 
         if dump is None:
             dump = Dump()
@@ -6986,7 +7827,44 @@ class PE:
         return dump.get_text()
 
     def dump_dict(self):
-        """Dump all the PE header information into a dictionary."""
+        """Dump all the PE header information into a dictionary.
+
+        Tolerant instances return their partial dictionary if a later structure
+        cannot be dumped.
+        """
+
+        if not self.tolerant:
+            return self._dump_dict()
+
+        try:
+            return self._dump_dict()
+        except Exception as exc:
+            result = {
+                "Parse Errors": [issue.to_dict() for issue in self.get_parse_errors()],
+                "Partial": True,
+                "Dump Error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+            for name in (
+                "DOS_HEADER",
+                "NT_HEADERS",
+                "FILE_HEADER",
+                "OPTIONAL_HEADER",
+            ):
+                header = getattr(self, name, None)
+                if header is not None:
+                    with contextlib.suppress(Exception):
+                        result[name] = header.dump_dict()
+            result["PE Sections"] = []
+            for section in self.sections:
+                with contextlib.suppress(Exception):
+                    result["PE Sections"].append(section.dump_dict())
+            return result
+
+    def _dump_dict(self):
+        """Dump all PE header information into a dictionary."""
 
         dump_dict = {}
 
@@ -7990,6 +8868,156 @@ class PE:
                 self.SectionAlignment_Warning = True
 
         return cache_adjust_SectionAlignment(val, section_alignment, file_alignment)
+
+
+class PEBatchResult(list):
+    """List of PE objects with aggregate parse-error statistics."""
+
+    def __init__(self, iterable=()):
+        super().__init__(iterable)
+        self.refresh_stats()
+
+    def refresh_stats(self):
+        """Recompute aggregate statistics from the contained PE objects."""
+        categories = Counter()
+        stages = Counter()
+        exception_types = Counter()
+        total_errors = 0
+        samples_with_errors = 0
+        for pe in self:
+            errors = pe.get_parse_errors()
+            if errors:
+                samples_with_errors += 1
+            total_errors += len(errors)
+            categories.update(pe.get_error_stats("category"))
+            stages.update(pe.get_error_stats("stage"))
+            exception_types.update(pe.get_error_stats("exception_type"))
+        self.error_stats = dict(categories)
+        self.error_categories = self.error_stats
+        self.stage_stats = dict(stages)
+        self.exception_type_stats = dict(exception_types)
+        self.total_errors = total_errors
+        self.samples_with_errors = samples_with_errors
+        exception_stats = dict(exception_types)
+        self.statistics = {
+            "samples": len(self),
+            "samples_with_errors": samples_with_errors,
+            "total_errors": total_errors,
+            "by_category": self.error_stats,
+            "by_stage": self.stage_stats,
+            "by_exception_type": exception_stats,
+            "by_type": exception_stats,
+            "by_class": exception_stats,
+        }
+        return self.statistics
+
+    def get_error_stats(self, by="category"):
+        """Return aggregate error counts grouped by ``category``."""
+        if by == "category":
+            return dict(self.error_stats)
+        if by == "stage":
+            return dict(self.stage_stats)
+        if by in ("type", "exception_type"):
+            return dict(self.exception_type_stats)
+        return {}
+
+    def get_error_statistics(self):
+        """Return the complete aggregate statistics dictionary."""
+        self.refresh_stats()
+        return dict(self.statistics)
+
+    @property
+    def errors(self):
+        """All classified errors across the batch."""
+        return [issue for pe in self for issue in pe.get_parse_errors()]
+
+    @property
+    def parse_errors(self):
+        """Alias for :attr:`errors`."""
+        return self.errors
+
+    @property
+    def stats(self):
+        """Alias for :attr:`statistics`."""
+        return self.get_error_statistics()
+
+    def get_exception_stats(self, by="category"):
+        """Alias for :meth:`get_error_stats`."""
+        return self.get_error_stats(by)
+
+    def to_dict(self, include_results=False):
+        """Return batch statistics, optionally including per-sample results."""
+        result = {
+            "statistics": self.get_error_statistics(),
+            "errors": [issue.to_dict() for pe in self for issue in pe.get_parse_errors()],
+        }
+        if include_results:
+            result["samples"] = [
+                {
+                    "name": getattr(pe, "name", None),
+                    "parse_ok": bool(pe.parse_ok),
+                    "partial": bool(pe.partial),
+                    "errors": [issue.to_dict() for issue in pe.get_parse_errors()],
+                }
+                for pe in self
+            ]
+        return result
+
+
+# Common alternative names for callers that treat batches as reports.
+PEParseReport = PEBatchResult
+PEBatchParseResult = PEBatchResult
+
+
+def parse_many(samples, tolerant=True, **kwargs):
+    """Parse an iterable of samples without aborting on malformed inputs.
+
+    A sample may be another :class:`PE` instance, a filesystem path, a bytes-like
+    object, or a binary file-like object.  Returns a :class:`PEBatchResult`
+    (a list subclass) with aggregate ``error_stats`` keyed by error category.
+    """
+    options = dict(kwargs)
+    options["tolerant"] = tolerant
+    result = PEBatchResult()
+
+    for sample in samples:
+        try:
+            if isinstance(sample, PE):
+                pe = sample
+            elif isinstance(sample, (str, bytes, os.PathLike)) and not isinstance(
+                sample, (bytes, bytearray)
+            ):
+                pe = PE(name=sample, **options)
+            elif isinstance(sample, (bytes, bytearray, memoryview, mmap.mmap)):
+                pe = PE(data=sample, **options)
+            elif hasattr(sample, "read"):
+                pe = PE(data=sample.read(), **options)
+            else:
+                pe = PE(data=sample, **options)
+        except Exception as exc:
+            if not tolerant:
+                raise
+            try:
+                pe = PE(data=b"", tolerant=True, **{
+                    key: value for key, value in options.items() if key != "tolerant"
+                })
+            except Exception:
+                pe = PE(data=b"", tolerant=True)
+            pe.record_parse_error(
+                exc,
+                PEErrorCategory.UNKNOWN,
+                stage="parse_many",
+            )
+        result.append(pe)
+
+    result.refresh_stats()
+    return result
+
+
+def parse(data=None, name=None, **kwargs):
+    """Tolerant-by-default convenience wrapper around :class:`PE`."""
+    kwargs.setdefault("tolerant", True)
+    return PE(data=data, name=name, **kwargs)
 
 
 def main():
